@@ -1,0 +1,104 @@
+name: Upstream Sync & Build
+
+on:
+  schedule:
+    # Her gun 02:00 UTC'de upstream kontrol et
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      synced: ${{ steps.sync.outputs.synced }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/rustdesk/rustdesk.git
+
+      - name: Fetch upstream
+        run: git fetch upstream master --tags
+
+      - name: Check for new changes
+        id: sync
+        run: |
+          LOCAL=$(git rev-parse HEAD)
+          UPSTREAM=$(git rev-parse upstream/master)
+          if [ "$LOCAL" = "$UPSTREAM" ]; then
+            echo "Already up to date"
+            echo "synced=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New upstream changes detected"
+            echo "synced=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream (branding dosyalari korunur)
+        if: steps.sync.outputs.synced == 'true'
+        run: |
+          # Merge upstream, branding dosyalarini koru (ours strategy for images)
+          git merge upstream/master --no-edit -X ours || {
+            # Conflict varsa branding dosyalarini koru
+            git checkout --ours flutter/assets/logo.png flutter/assets/icon.png
+            git checkout --ours res/icon.ico res/icon.png res/tray-icon.ico res/mac-icon.png
+            git checkout --ours res/128x128.png res/128x128@2x.png res/64x64.png res/32x32.png
+            git add .
+            git commit --no-edit
+          }
+          git push origin master
+
+      - name: Get latest upstream tag (version)
+        if: steps.sync.outputs.synced == 'true'
+        id: version
+        run: |
+          # En son upstream tag'ini al
+          TAG=$(git describe --tags --abbrev=0 upstream/master 2>/dev/null || echo "")
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Latest upstream tag: $TAG"
+
+  build:
+    needs: sync
+    if: needs.sync.outputs.synced == 'true'
+    uses: ./.github/workflows/flutter-build.yml
+    secrets: inherit
+    with:
+      upload-artifact: true
+      upload-tag: ${{ needs.sync.outputs.version || 'nightly' }}
+
+  release:
+    needs: [sync, build]
+    if: needs.sync.outputs.synced == 'true' && needs.sync.outputs.version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.sync.outputs.version }}
+          name: "Zafer RustDesk ${{ needs.sync.outputs.version }}"
+          body: |
+            Zafer Bilgisayar logolu RustDesk build.
+            Upstream: https://github.com/rustdesk/rustdesk/releases/tag/${{ needs.sync.outputs.version }}
+          files: artifacts/**/*
+          draft: false
+          prerelease: false
