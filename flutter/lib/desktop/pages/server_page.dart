@@ -364,7 +364,15 @@ Widget buildConnectionCard(Client client) {
             alignment: Alignment.bottomCenter,
             child: _CmControlPanel(client: client),
           ),
-        )
+        ),
+        Opacity(
+          opacity: 0.6,
+          child: Container(
+            constraints: BoxConstraints(maxWidth: 140, maxHeight: 36),
+            padding: EdgeInsets.only(bottom: 4.0),
+            child: loadLogo(),
+          ),
+        ),
       ],
     ).paddingSymmetric(vertical: 4.0, horizontal: 8.0),
   );
