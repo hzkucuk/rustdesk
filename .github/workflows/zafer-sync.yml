@@ -32,7 +32,7 @@ jobs:
         run: git remote add upstream https://github.com/rustdesk/rustdesk.git
 
       - name: Fetch upstream
-        run: git fetch upstream master --tags
+        run: git fetch upstream master --tags --force
 
       - name: Check for new changes
         id: sync
