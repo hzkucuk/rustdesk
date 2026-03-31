@@ -87,12 +87,12 @@ jobs:
       contents: write
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@master
         with:
           path: artifacts/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2.6.1
         with:
           tag_name: ${{ needs.sync.outputs.version }}
           name: "Zafer RustDesk ${{ needs.sync.outputs.version }}"
@@ -102,3 +102,4 @@ jobs:
           files: artifacts/**/*
           draft: false
           prerelease: false
+
