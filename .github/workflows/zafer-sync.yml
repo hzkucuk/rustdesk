@@ -1,0 +1,201 @@
+name: Upstream Sync & Build
+
+on:
+  schedule:
+    # Her gun 02:00 UTC'de upstream kontrol et
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      synced: ${{ steps.sync.outputs.synced }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/rustdesk/rustdesk.git
+
+      - name: Fetch upstream tags
+        run: git fetch upstream master --tags --force
+
+      - name: Check for new stable release
+        id: sync
+        run: |
+          # Son upstream stabil tag'ini bul
+          LATEST_TAG=$(git tag -l --sort=-version:refname | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          echo "Latest upstream tag: $LATEST_TAG"
+
+          # Bizim son build ettigimiz tag (zafer- prefix ile)
+          OUR_LATEST=$(git tag -l 'zafer-*' --sort=-version:refname | head -1 | sed 's/^zafer-//')
+          echo "Our latest build: $OUR_LATEST"
+
+          if [ "$LATEST_TAG" = "$OUR_LATEST" ]; then
+            echo "Already up to date with $LATEST_TAG"
+            echo "synced=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New stable release detected: $LATEST_TAG (we have: $OUR_LATEST)"
+            echo "synced=true" >> "$GITHUB_OUTPUT"
+            echo "new_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save our custom files
+        if: steps.sync.outputs.synced == 'true'
+        run: |
+          # Workflow ve branding dosyalarini yedekle
+          mkdir -p /tmp/zafer-backup/.github/workflows
+          cp .gitmodules /tmp/zafer-backup/.gitmodules 2>/dev/null || true
+          # Workflow dosyalarini yedekle
+          cp .github/workflows/zafer-sync.yml /tmp/zafer-backup/.github/workflows/zafer-sync.yml
+          cp .github/workflows/flutter-build.yml /tmp/zafer-backup/.github/workflows/flutter-build.yml
+          # Branding dosyalarini yedekle
+          for f in flutter/assets/logo.png flutter/assets/icon.png \
+                   res/icon.ico res/icon.png res/tray-icon.ico res/mac-icon.png \
+                   res/128x128.png res/128x128@2x.png res/64x64.png res/32x32.png; do
+            if [ -f "$f" ]; then
+              mkdir -p "/tmp/zafer-backup/$(dirname $f)"
+              cp "$f" "/tmp/zafer-backup/$f"
+            fi
+          done
+
+      - name: Reset to upstream and reapply customizations
+        if: steps.sync.outputs.synced == 'true'
+        run: |
+          # Upstream'in stabil tag'ine reset et (master degil!)
+          NEW_TAG="${{ steps.sync.outputs.new_tag }}"
+          git reset --hard "$NEW_TAG"
+
+          # Submodule'u init et (hala .gitmodules mevcut)
+          git submodule update --init libs/hbb_common
+
+          # Submodule'u regular directory'ye cevir
+          rm -rf libs/hbb_common/.git
+          git rm --cached libs/hbb_common 2>/dev/null || true
+          rm -f .gitmodules
+          touch .gitmodules
+          git add libs/hbb_common
+
+          # config.rs'de sadece server ve key satirlarini patch'le (tum dosyayi degistirme!)
+          sed -i 's|pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];|pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["rs.zaferbilgisayar.com"];|' libs/hbb_common/src/config.rs
+          sed -i 's|pub const RS_PUB_KEY: &str = ".*";|pub const RS_PUB_KEY: \&str = "R59w9aEqRsANauLPTsDJbUEGq12j91jtryqKXQLyhEA=";|' libs/hbb_common/src/config.rs
+
+          # Workflow dosyalarini geri koy
+          cp /tmp/zafer-backup/.github/workflows/zafer-sync.yml .github/workflows/zafer-sync.yml
+          cp /tmp/zafer-backup/.github/workflows/flutter-build.yml .github/workflows/flutter-build.yml
+
+          # Branding dosyalarini geri koy
+          for f in flutter/assets/logo.png flutter/assets/icon.png \
+                   res/icon.ico res/icon.png res/tray-icon.ico res/mac-icon.png \
+                   res/128x128.png res/128x128@2x.png res/64x64.png res/32x32.png; do
+            if [ -f "/tmp/zafer-backup/$f" ]; then
+              cp "/tmp/zafer-backup/$f" "$f"
+            fi
+          done
+
+          git add -A
+          git commit -m "sync: upstream merge with Zafer customizations" --no-edit || true
+          git push origin master --force
+
+      - name: Get latest upstream tag (version)
+        id: version
+        run: |
+          # sync step'ten gelen tag veya manual tetikleme icin bul
+          TAG="${{ steps.sync.outputs.new_tag }}"
+          if [ -z "$TAG" ]; then
+            git remote add upstream https://github.com/rustdesk/rustdesk.git 2>/dev/null || true
+            git fetch upstream master --tags --force 2>/dev/null || true
+            TAG=$(git tag -l --sort=-version:refname | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          fi
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Latest upstream tag: $TAG"
+
+  build:
+    needs: sync
+    if: needs.sync.outputs.synced == 'true' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/flutter-build.yml
+    secrets: inherit
+    with:
+      upload-artifact: true
+      upload-tag: ${{ needs.sync.outputs.version || 'nightly' }}
+
+  release:
+    needs: [sync, build]
+    if: (needs.sync.outputs.synced == 'true' || github.event_name == 'workflow_dispatch') && needs.sync.outputs.version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release-files
+          find artifacts/ -type f \( \
+            -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' \
+            -o -name '*.AppImage' -o -name '*.flatpak' \
+            -o -name '*.apk' -o -name '*.ipa' \
+            -o -name '*-setup.exe' -o -name '*-installer.exe' \
+            -o -name 'rustdesk-*.exe' -o -name 'rustdesk-*.msi' \
+            -o -name 'rustdesk-*.pkg' -o -name '*.zip' \
+          \) -exec cp {} release-files/ \;
+          echo "Files to release:"
+          ls -la release-files/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: zafer-${{ needs.sync.outputs.version }}
+          name: "Zafer RustDesk ${{ needs.sync.outputs.version }}"
+          body: |
+            Zafer Bilgisayar logolu RustDesk build.
+            Upstream: https://github.com/rustdesk/rustdesk/releases/tag/${{ needs.sync.outputs.version }}
+          files: release-files/*
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: false
+          make_latest: true
+
+      - name: Rename files for website
+        run: |
+          mkdir -p ftp-upload
+          # Windows
+          cp release-files/rustdesk-*-x86_64-setup.exe ftp-upload/ZaferOnlineDestek.exe 2>/dev/null || true
+          cp release-files/rustdesk-*-x86_64.msi ftp-upload/ZaferHostKurulum.msi 2>/dev/null || true
+          # macOS
+          cp release-files/rustdesk-*-aarch64.dmg ftp-upload/OnlineDestek-macOS-ARM.dmg 2>/dev/null || true
+          cp release-files/rustdesk-*-x86_64.dmg ftp-upload/OnlineDestek-macOS-Intel.dmg 2>/dev/null || true
+          # Linux
+          cp release-files/rustdesk-*-x86_64.AppImage ftp-upload/OnlineDestek-Linux-x86.AppImage 2>/dev/null || true
+          # Android
+          cp release-files/rustdesk-*-universal.apk ftp-upload/OnlineDestekAndroid.apk 2>/dev/null || true
+          echo "Files for FTP upload:"
+          ls -la ftp-upload/
+
+      - name: Upload to FTP
+        run: |
+          sudo apt-get install -y -qq lftp
+          lftp -u "${{ secrets.FTP_USER }},${{ secrets.FTP_PASS }}" "${{ secrets.FTP_HOST }}" <<EOF
+          set ssl:verify-certificate no
+          cd /public_html
+          mput ftp-upload/*
+          bye
+          EOF
+          echo "FTP upload complete!"
