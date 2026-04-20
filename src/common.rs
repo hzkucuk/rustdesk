@@ -1041,6 +1041,11 @@ pub fn get_custom_rendezvous_server(custom: String) -> String {
     if !config::PROD_RENDEZVOUS_SERVER.read().unwrap().is_empty() {
         return config::PROD_RENDEZVOUS_SERVER.read().unwrap().clone();
     }
+    // Zafer customization: compile-time embedded fallback
+    // Ensures get_api_server_ derives http://<host>:21114 instead of admin.rustdesk.com
+    if let Some(host) = config::RENDEZVOUS_SERVERS.first() {
+        return host.to_string();
+    }
     "".to_owned()
 }
 

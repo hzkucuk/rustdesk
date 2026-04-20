@@ -94,6 +94,42 @@ jobs:
           sed -i 's|pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];|pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["rs.zaferbilgisayar.com"];|' libs/hbb_common/src/config.rs
           sed -i 's|pub const RS_PUB_KEY: &str = ".*";|pub const RS_PUB_KEY: \&str = "R59w9aEqRsANauLPTsDJbUEGq12j91jtryqKXQLyhEA=";|' libs/hbb_common/src/config.rs
 
+          # Zafer customization: get_custom_rendezvous_server fallback (API server fix)
+          # Without this, get_api_server_ falls back to https://admin.rustdesk.com
+          python3 - <<'PYEOF'
+          p = "src/common.rs"
+          with open(p, "r", encoding="utf-8") as f:
+              s = f.read()
+          needle = (
+              '    if !config::PROD_RENDEZVOUS_SERVER.read().unwrap().is_empty() {\n'
+              '        return config::PROD_RENDEZVOUS_SERVER.read().unwrap().clone();\n'
+              '    }\n'
+              '    "".to_owned()\n'
+              '}\n'
+          )
+          patched = (
+              '    if !config::PROD_RENDEZVOUS_SERVER.read().unwrap().is_empty() {\n'
+              '        return config::PROD_RENDEZVOUS_SERVER.read().unwrap().clone();\n'
+              '    }\n'
+              '    // Zafer customization: compile-time embedded fallback\n'
+              '    // Ensures get_api_server_ derives http://<host>:21114 instead of admin.rustdesk.com\n'
+              '    if let Some(host) = config::RENDEZVOUS_SERVERS.first() {\n'
+              '        return host.to_string();\n'
+              '    }\n'
+              '    "".to_owned()\n'
+              '}\n'
+          )
+          if "Zafer customization: compile-time embedded fallback" not in s:
+              if needle not in s:
+                  raise SystemExit("PATCH FAILED: get_custom_rendezvous_server signature changed upstream")
+              s = s.replace(needle, patched, 1)
+              with open(p, "w", encoding="utf-8") as f:
+                  f.write(s)
+              print("Applied: get_custom_rendezvous_server fallback")
+          else:
+              print("Already patched: get_custom_rendezvous_server fallback")
+          PYEOF
+
           # Workflow dosyalarini geri koy
           cp /tmp/zafer-backup/.github/workflows/zafer-sync.yml .github/workflows/zafer-sync.yml
           cp /tmp/zafer-backup/.github/workflows/flutter-build.yml .github/workflows/flutter-build.yml
