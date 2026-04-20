@@ -1,4 +1,4 @@
-name: Upstream Sync & Build (Linux Only)
+name: Upstream Sync & Build (Windows + Linux + Android)
 
 on:
   schedule:
@@ -127,7 +127,7 @@ jobs:
   build:
     needs: sync
     if: needs.sync.outputs.synced == 'true' || github.event_name == 'workflow_dispatch'
-    uses: ./.github/workflows/zafer-linux-build.yml
+    uses: ./.github/workflows/zafer-build.yml
     secrets: inherit
     with:
       upload-artifact: true
