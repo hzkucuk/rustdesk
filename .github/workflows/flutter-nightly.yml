@@ -1,9 +1,11 @@
 name: Flutter Nightly Build
 
 on:
-  schedule:
-    # schedule build every night
-    - cron: "0 0 * * *"
+  # Nightly schedule kapatildi (29.07.2026) — bu build Zafer zincirinde
+  # kullanilmiyor ('nightly' tag'ine yaziyor) ve 22.06.2026'dan beri
+  # AppImage job'larinda fail ediyordu. Gerekirse manuel tetiklenir.
+  # schedule:
+  #   - cron: "0 0 * * *"
   workflow_dispatch:
 
 jobs:
